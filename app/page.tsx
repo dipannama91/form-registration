@@ -1,9 +1,10 @@
 "use client"
-import React, { useState, useEffect, ChangeEvent, FormEvent } from 'react';
+import React, { useState, useEffect, ChangeEvent, FormEvent, useCallback } from 'react';
+import Cropper from 'react-easy-crop';
 import { addRegistration, uploadProfilePicture, cropImageToDimensions } from './firebase/services';
 import { db } from './firebase/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { User, Mail, Phone, CheckCircle, Upload, Loader, Calendar, Briefcase, GraduationCap, Heart, Fingerprint, BadgeCheck } from 'lucide-react';
+import { User, Mail, Phone, CheckCircle, Upload, Loader, Calendar, Briefcase, GraduationCap, Heart, Fingerprint, BadgeCheck, Pencil } from 'lucide-react';
 
 // Type definitions
 interface FormData {
@@ -478,18 +479,107 @@ interface ProfileUploadFieldProps {
 
 const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ id, name, file, onChange, error, isCompressing }) => {
     const [preview, setPreview] = useState<string | null>(null);
+    const [crop, setCrop] = useState({ x: 0, y: 0 });
+    const [zoom, setZoom] = useState(1);
+    const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
+    const [showCropper, setShowCropper] = useState(false);
+    const [localFile, setLocalFile] = useState<File | null>(null);
+    const [croppedImage, setCroppedImage] = useState<string | null>(null);
+    const [hasCropped, setHasCropped] = useState(false);
 
     useEffect(() => {
         if (!file) {
             setPreview(null);
+            setShowCropper(false);
+            setLocalFile(null);
+            // Do NOT reset croppedImage here, so the edit icon remains after cropping
             return;
         }
         const objectUrl = URL.createObjectURL(file);
         setPreview(objectUrl);
-
+        setShowCropper(!hasCropped); // Only show cropper on first upload
+        setLocalFile(file);
         return () => URL.revokeObjectURL(objectUrl);
     }, [file]);
 
+    // Helper to get cropped image as File and DataURL
+    const getCroppedImg = useCallback(async (imageSrc: string, cropPixels: any): Promise<{ file: File, url: string } | null> => {
+        return new Promise((resolve, reject) => {
+            const image = new window.Image();
+            image.crossOrigin = 'anonymous';
+            image.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 150;
+                canvas.height = 190;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return reject('No ctx');
+                ctx.drawImage(
+                    image,
+                    cropPixels.x,
+                    cropPixels.y,
+                    cropPixels.width,
+                    cropPixels.height,
+                    0,
+                    0,
+                    150,
+                    190
+                );
+                canvas.toBlob(blob => {
+                    if (!blob) return reject('No blob');
+                    const file = new File([blob], localFile?.name || 'cropped.jpg', { type: 'image/jpeg' });
+                    const url = URL.createObjectURL(blob);
+                    resolve({ file, url });
+                }, 'image/jpeg', 0.95);
+            };
+            image.onerror = reject;
+            image.src = imageSrc;
+        });
+    }, [localFile]);
+
+    interface CroppedArea {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }
+
+    interface Area {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }
+
+    const onCropComplete = useCallback(
+        (croppedArea: Area, croppedAreaPixels: CroppedArea) => {
+            setCroppedAreaPixels(croppedAreaPixels);
+        },
+        []
+    );
+
+    // When user clicks 'Apply Crop', update the file in parent and show cropped image
+    const handleApplyCrop = async () => {
+        if (!preview || !croppedAreaPixels) return;
+        const result = await getCroppedImg(preview, croppedAreaPixels);
+        if (result) {
+            const { file: croppedFile, url } = result;
+            // Create a synthetic event to pass to onChange
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(croppedFile);
+            const syntheticEvent = {
+                target: {
+                    name,
+                    files: dataTransfer.files,
+                }
+            } as unknown as ChangeEvent<HTMLInputElement>;
+            onChange(syntheticEvent);
+            setShowCropper(false);
+            setCroppedImage(url);
+            setHasCropped(true);
+        }
+    };
+
+    // Modal dialog for cropping
     return (
         <div className="flex flex-col items-center text-center mt-5">
             <label className="block text-sm font-medium text-gray-700">
@@ -499,6 +589,19 @@ const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ id, name, file,
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[150px] h-[190px] bg-gray-100 flex items-center justify-center overflow-hidden border-2 border-dashed border-gray-300 rounded-md">
                     {isCompressing ? (
                         <Loader className="text-gray-400 animate-spin" size={48} />
+                    ) : croppedImage ? (
+                        <div className="relative w-full h-full">
+                            <img src={croppedImage} alt="Cropped Preview" className="w-full h-full object-cover" />
+                            <button
+                                type="button"
+                                className="absolute top-2 right-2 bg-white bg-opacity-80 rounded-full p-1 shadow hover:bg-orange-100 transition"
+                                title="Edit/Crop Image"
+                                onClick={() => setShowCropper(true)}
+                                style={{zIndex: 2}}
+                            >
+                                <Pencil size={18} className="text-orange-500" />
+                            </button>
+                        </div>
                     ) : preview ? (
                         <img src={preview} alt="Profile Preview" className="w-full h-full object-cover" />
                     ) : (
@@ -516,6 +619,36 @@ const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ id, name, file,
                 Max 100KB. PNG or JPG.
             </p>
             {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+
+            {/* Modal for cropping - larger and less opaque overlay */}
+            {showCropper && preview && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+                    <div className="bg-white rounded-lg shadow-lg p-6 relative w-[420px] max-w-full">
+                        <h3 className="text-lg font-semibold mb-2">Crop Image</h3>
+                        <div className="relative w-[250px] h-[320px] mx-auto bg-gray-100">
+                            <Cropper
+                                image={preview}
+                                crop={crop}
+                                zoom={zoom}
+                                aspect={150/190}
+                                cropShape="rect"
+                                showGrid={true}
+                                onCropChange={setCrop}
+                                onZoomChange={setZoom}
+                                onCropComplete={onCropComplete}
+                                minZoom={1}
+                                maxZoom={3}
+                                restrictPosition={false}
+                                style={{ containerStyle: { width: '250px', height: '320px' } }}
+                            />
+                        </div>
+                        <div className="flex justify-center gap-4 mt-4">
+                            <button type="button" className="bg-orange-500 text-white px-4 py-1 rounded shadow" onClick={handleApplyCrop}>Apply Crop</button>
+                            <button type="button" className="bg-gray-300 text-gray-700 px-4 py-1 rounded shadow" onClick={() => setShowCropper(false)}>Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

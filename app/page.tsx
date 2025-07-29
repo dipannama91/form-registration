@@ -1,10 +1,11 @@
 "use client"
 import React, { useState, useEffect, ChangeEvent, FormEvent, useCallback } from 'react';
+import { createPortal } from 'react-dom'; // Import createPortal
 import Cropper from 'react-easy-crop';
-import { addRegistration, uploadProfilePicture, cropImageToDimensions } from './firebase/services';
+import { User, Loader, Pencil, CheckCircle } from 'lucide-react';
+import { addRegistration, uploadProfilePicture, cropImageToDimensions, checkAadhaarExists } from './firebase/services';
 import { db } from './firebase/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { User, Mail, Phone, CheckCircle, Upload, Loader, Calendar, Briefcase, GraduationCap, Heart, Fingerprint, BadgeCheck, Pencil } from 'lucide-react';
 
 // Type definitions
 interface FormData {
@@ -46,7 +47,7 @@ declare global {
 const App: React.FC = () => {
     const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-    const [aadhaarExists, setAadhaarExists] = useState<boolean>(false);
+    const [aadhaarExistsError, setAadhaarExistsError] = useState<boolean>(false);
     const [formData, setFormData] = useState<FormData>({
         fullName: '',
         dob: '',
@@ -83,46 +84,24 @@ const App: React.FC = () => {
         }
     }, []);
 
-    const handleChange = async (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
         const { name, value } = e.target;
 
         if ('files' in e.target && e.target.files && e.target.files[0] && name === 'profilePicture') {
             const file = e.target.files[0];
-            if (!window.imageCompression) {
-                console.error('Image compression library not loaded yet.');
-                setErrors(prev => ({ ...prev, [name]: 'Component is loading, please try again.' }));
-                return;
-            }
-
-            setCompressing(prev => ({ ...prev, [name]: true }));
-
-            const options = {
-                maxSizeMB: 0.1, // Max size 100KB
-                maxWidthOrHeight: 800,
-                useWebWorker: true,
-            };
-
-            try {
-                const compressedFile = await window.imageCompression(file, options);
-                setFormData((prev) => ({ ...prev, [name]: compressedFile }));
-                if (errors[name as keyof FormErrors]) {
-                    setErrors(prev => ({ ...prev, [name]: undefined }));
-                }
-            } catch (error) {
-                console.error('Error compressing image:', error);
-                setErrors(prev => ({ ...prev, [name]: 'Image compression failed. Please try another file.' }));
-            } finally {
-                setCompressing(prev => ({ ...prev, [name]: false }));
+            // This now just sets the file, the cropping/compression is handled in ProfileUploadField
+            setFormData((prev) => ({ ...prev, [name]: file }));
+            if (errors[name as keyof FormErrors]) {
+                setErrors(prev => ({ ...prev, [name]: undefined }));
             }
         } else {
-            // Enforce max length for specific fields
             let processedValue = value;
-            if (name === 'aadhaar' && value.length > 16) {
-                processedValue = value.slice(0, 16);
+            if (name === 'aadhaar' && value.length > 12) {
+                processedValue = value.slice(0, 12);
             } else if (name === 'pan' && value.length > 10) {
-                processedValue = value.slice(0, 10);
+                processedValue = value.slice(0, 10).toUpperCase();
             } else if (name === 'voterId' && value.length > 10) {
-                processedValue = value.slice(0, 10);
+                processedValue = value.slice(0, 10).toUpperCase();
             }
 
             setFormData((prev) => ({ ...prev, [name]: processedValue }));
@@ -132,6 +111,7 @@ const App: React.FC = () => {
         }
     };
 
+
     const validateForm = (): boolean => {
         let newErrors: FormErrors = {};
         if (!formData.fullName) newErrors.fullName = 'Full name is required.';
@@ -139,7 +119,7 @@ const App: React.FC = () => {
         if (!formData.gender) newErrors.gender = 'Gender is required.';
         if (!formData.occupation) newErrors.occupation = 'Occupation is required.';
         if (!formData.education) newErrors.education = 'Highest qualification is required.';
-        if (!formData.aadhaar || !/^\d{16}$/.test(formData.aadhaar)) newErrors.aadhaar = 'A valid 16-digit Aadhaar number is required.';
+        if (!formData.aadhaar || !/^\d{12}$/.test(formData.aadhaar)) newErrors.aadhaar = 'A valid 12-digit Aadhaar number is required.';
         if (formData.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(formData.pan.toUpperCase())) newErrors.pan = 'Please enter a valid PAN number.';
         if (!formData.voterId || !/^[A-Z]{3}[0-9]{7}$/.test(formData.voterId.toUpperCase())) newErrors.voterId = 'A valid 10-character Voter ID is required.';
         if (!formData.address1) newErrors.address1 = 'Permanent address is required.';
@@ -157,62 +137,36 @@ const App: React.FC = () => {
     const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (isSubmitting) return;
+
         setIsSubmitting(true);
-        setAadhaarExists(false);
+        setAadhaarExistsError(false);
+
         if (!validateForm()) {
             setIsSubmitting(false);
             return;
         }
 
-        // Check if Aadhaar already exists
         try {
-            const q = query(collection(db, 'registrations'), where('aadhaar', '==', formData.aadhaar));
-            const querySnapshot = await getDocs(q);
-            if (!querySnapshot.empty) {
-                setAadhaarExists(true);
+            const exists = await checkAadhaarExists(formData.aadhaar);
+            if (exists) {
+                setAadhaarExistsError(true);
                 setIsSubmitting(false);
                 return;
             }
-        } catch (err) {
-            setErrors(prev => ({ ...prev, aadhaar: 'Error checking Aadhaar. Please try again.' }));
-            setIsSubmitting(false);
-            return;
-        }
 
-        let profilePictureUrl = '';
-        try {
-            let processedFile = formData.profilePicture;
-            // Crop the image to 150x190px if needed
-            if (processedFile) {
-                const img = new window.Image();
-                const url = URL.createObjectURL(processedFile);
-                await new Promise((resolve, reject) => {
-                    img.onload = () => {
-                        if (img.width !== 150 || img.height !== 190) {
-                            cropImageToDimensions(processedFile as File, 150, 190).then(cropped => {
-                                processedFile = cropped;
-                                resolve(null);
-                            }).catch(reject);
-                        } else {
-                            resolve(null);
-                        }
-                    };
-                    img.onerror = reject;
-                    img.src = url;
-                });
-                URL.revokeObjectURL(url);
-                profilePictureUrl = await uploadProfilePicture(processedFile, formData.aadhaar || Date.now().toString());
-            }
-            // Prepare data for Firestore (exclude File object)
+            const profilePictureUrl = await uploadProfilePicture(formData.profilePicture!, formData.aadhaar);
+
             const dataToSubmit = {
                 ...formData,
                 profilePicture: profilePictureUrl,
                 submissionDate: new Date().toISOString(),
             };
+
             await addRegistration(dataToSubmit);
             setIsSubmitted(true);
         } catch (err) {
-            setErrors(prev => ({ ...prev, profilePicture: 'Failed to upload data. Please try again.' }));
+            console.error("Submission failed:", err);
+            setErrors(prev => ({ ...prev, profilePicture: 'Failed to submit data. Please try again.' }));
         } finally {
             setIsSubmitting(false);
         }
@@ -220,6 +174,7 @@ const App: React.FC = () => {
 
     const handleReset = () => {
         setIsSubmitted(false);
+        setAadhaarExistsError(false);
         setFormData({
             fullName: '', dob: '', gender: '', occupation: '', education: '',
             aadhaar: '', pan: '', voterId: '',
@@ -230,18 +185,17 @@ const App: React.FC = () => {
         setErrors({});
     };
 
-
     return (
-        <div className="min-h-screen bg-orange-500/80 font-sans" tabIndex={isSubmitting ? -1 : undefined} style={isSubmitting ? { pointerEvents: 'none', userSelect: 'none' } : {}}>
+        <div className="min-h-screen bg-orange-500/80 font-sans">
             <style>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.5s ease-out forwards;
-        }
-      `}</style>
+                @keyframes fade-in {
+                    from { opacity: 0; transform: translateY(10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .animate-fade-in {
+                    animation: fade-in 0.5s ease-out forwards;
+                }
+            `}</style>
             <header className="bg-white shadow-md flex items-center p-2">
                 <div className="container mx-auto px-4 py-0 flex items-center space-x-4">
                     <img src="/logo.png" alt="Rudra Foundation Logo" className="w-24 h-24 rounded-full" />
@@ -249,21 +203,19 @@ const App: React.FC = () => {
                         <h1 className="text-xl -ml-4 md:text-2xl lg:text-3xl leading-8 font-bold text-orange-600">R.U.D.R.A</h1>
                         <p className="text-md -ml-4  text-gray-400">Rising Union for Digital Riders Association</p>
                     </div>
-
                 </div>
             </header>
 
             <main className="container mx-auto p-4 md:p-8">
                 <div className="max-w-4xl mx-auto bg-white p-6 md:p-8 rounded-lg border border-gray-200">
-                    {aadhaarExists ? (
-                        <div className="text-center text-red-600 text-lg font-semibold py-8">Oops! Seems like You are already Registered.</div>
+                    {aadhaarExistsError ? (
+                        <div className="text-center text-red-600 text-lg font-semibold py-8">Oops! This Aadhaar number is already registered.</div>
                     ) : isSubmitted ? (
                         <SuccessView handleReset={handleReset} />
                     ) : (
                         <RegistrationForm
                             formData={formData}
                             errors={errors}
-                            compressing={compressing}
                             handleChange={handleChange}
                             handleSubmit={handleSubmit}
                             isSubmitting={isSubmitting}
@@ -275,37 +227,28 @@ const App: React.FC = () => {
     );
 }
 
-export default App;
+// --- Components ---
 
-// Component Prop Types
 interface RegistrationFormProps {
     formData: FormData;
     errors: FormErrors;
-    compressing: CompressingState;
     handleChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void;
     handleSubmit: (e: FormEvent<HTMLFormElement>) => void;
     isSubmitting?: boolean;
 }
 
-const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, compressing, handleChange, handleSubmit, isSubmitting }) => {
-    const occupationOptions = [
-        "Private Sector Employee", "Government Employee", "Self-employed/Business",
-        "Professional", "Farmer", "Student", "Homemaker", "Retired", "Unemployed", "Other"
-    ];
-
+const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, handleChange, handleSubmit, isSubmitting }) => {
+    const occupationOptions = ["Private Sector Employee", "Government Employee", "Self-employed/Business", "Professional", "Farmer", "Student", "Homemaker", "Retired", "Unemployed", "Other"];
     return (
         <div className="animate-fade-in">
-            <form onSubmit={handleSubmit} className="space-y-6" autoComplete="off">
-                <div>
-                    <h1 className='text-2xl font-bold flex justify-center text-orange-600'>Registration Form</h1>
-                </div>
-                <hr className='text-gray-100 w-full '></hr>
+            <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+                <h1 className='text-2xl font-bold flex justify-center text-orange-600'>Registration Form</h1>
+                <hr />
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    {/* Form Fields - Left/Center */}
                     <div className="md:col-span-2 space-y-6">
                         <InputField id="fullName" name="fullName" type="text" placeholder="Full Name" label="Full Name *" value={formData.fullName} onChange={handleChange} error={errors.fullName} />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <InputField id="dob" name="dob" type="date" placeholder="" label="Date of Birth *" value={formData.dob} onChange={handleChange} error={errors.dob} />
+                            <InputField id="dob" name="dob" type="date" label="Date of Birth *" value={formData.dob} onChange={handleChange} error={errors.dob} />
                             <SelectField id="gender" name="gender" label="Gender *" value={formData.gender} onChange={handleChange} error={errors.gender} options={["Male", "Female", "Other"]} />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -313,43 +256,34 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, c
                             <InputField id="education" name="education" type="text" placeholder="e.g., B.Tech, High School" label="Highest Qualification *" value={formData.education} onChange={handleChange} error={errors.education} />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <InputField id="aadhaar" name="aadhaar" type="text" placeholder="16-digit Number" label="Aadhaar Number *" value={formData.aadhaar} onChange={handleChange} error={errors.aadhaar} maxLength={16} />
+                            <InputField id="aadhaar" name="aadhaar" type="text" placeholder="12-digit Number" label="Aadhaar Number *" value={formData.aadhaar} onChange={handleChange} error={errors.aadhaar} maxLength={12} />
                             <InputField id="pan" name="pan" type="text" placeholder="10-character PAN" label="PAN Number (Optional)" value={formData.pan} onChange={handleChange} error={errors.pan} maxLength={10} />
                         </div>
                         <InputField id="voterId" name="voterId" type="text" placeholder="10-character Voter ID" label="Voter ID *" value={formData.voterId} onChange={handleChange} error={errors.voterId} maxLength={10} />
-                        <InputField id="address1" name="address1" type="text" placeholder="Permanent Address" label="Residential/Permanent Address *" value={formData.address1} onChange={handleChange} error={errors.address1} />
+                        <InputField id="address1" name="address1" type="text" placeholder="Permanent Address" label="Permanent Address *" value={formData.address1} onChange={handleChange} error={errors.address1} />
                         <InputField id="address2" name="address2" type="text" placeholder="Current Address" label="Current Address" value={formData.address2} onChange={handleChange} error={errors.address2} />
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <InputField id="city" name="city" type="text" placeholder="City" label="City *" value={formData.city} onChange={handleChange} error={errors.city} />
                             <InputField id="state" name="state" type="text" placeholder="State" label="State *" value={formData.state} onChange={handleChange} error={errors.state} />
-                            <InputField id="zip" name="zip" type="text" placeholder="Zip Code" label="Zip Code (Optional)" value={formData.zip} onChange={handleChange} error={errors.zip} />
+                            <InputField id="zip" name="zip" type="text" placeholder="Zip Code" label="Zip Code (Optional)" value={formData.zip} onChange={handleChange} error={errors.zip} maxLength={6} />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <InputField id="phone" name="phone" type="tel" placeholder="Phone Number" label="Phone *" value={formData.phone} onChange={handleChange} error={errors.phone} />
-                            <InputField id="email" name="email" type="email" placeholder="Email" label="Email (Optional)" value={formData.email} onChange={handleChange} error={errors.email} />
+                            <InputField id="phone" name="phone" type="tel" placeholder="10-digit Phone Number" label="Phone *" value={formData.phone} onChange={handleChange} error={errors.phone} maxLength={10} />
+                            <InputField id="email" name="email" type="email" placeholder="example@email.com" label="Email (Optional)" value={formData.email} onChange={handleChange} error={errors.email} />
                         </div>
-                        <TextAreaField id="reasonForJoining" name="reasonForJoining" placeholder="Tell us why you want to join our NGO..." label="Reason for Joining" value={formData.reasonForJoining} onChange={handleChange} />
+                        <TextAreaField id="reasonForJoining" name="reasonForJoining" placeholder="Tell us why you want to join..." label="Reason for Joining (Optional)" value={formData.reasonForJoining} onChange={handleChange} />
                     </div>
-
-                    {/* Profile Picture Upload - Right */}
                     <div className="md:col-span-1">
                         <ProfileUploadField
-                            id="profilePicture"
                             name="profilePicture"
                             file={formData.profilePicture}
                             onChange={handleChange}
                             error={errors.profilePicture}
-                            isCompressing={compressing.profilePicture}
                         />
                     </div>
                 </div>
-
                 <div className="pt-8 flex justify-center">
-                    <button
-                        type="submit"
-                        className={`w-full md:w-auto px-8 py-3 bg-orange-500 text-white font-semibold rounded-md focus:outline-none focus:ring-4 focus:ring-red-300 transition-colors text-lg ${isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-800'}`}
-                        disabled={isSubmitting}
-                    >
+                    <button type="submit" className={`w-full md:w-auto px-8 py-3 bg-orange-500 text-white font-semibold rounded-md focus:outline-none focus:ring-4 focus:ring-red-300 transition-colors text-lg ${isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-800'}`} disabled={isSubmitting}>
                         {isSubmitting ? 'Submitting...' : 'Register'}
                     </button>
                 </div>
@@ -358,310 +292,168 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, c
     );
 };
 
-interface InputFieldProps {
-    id: string;
-    name: string;
-    type: string;
-    placeholder: string;
-    value: string;
-    onChange: (e: ChangeEvent<HTMLInputElement>) => void;
-    error?: string;
-    label: string;
-    maxLength?: number;
-}
+// --- Form Field Components ---
 
-const InputField: React.FC<InputFieldProps> = ({ id, name, type, placeholder, value, onChange, error, label, maxLength }) => {
-    const isRequired = label.endsWith('*');
-    const labelText = isRequired ? label.slice(0, -1).trim() : label;
+interface InputFieldProps { id: string; name: string; type: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLInputElement>) => void; error?: string; placeholder?: string; maxLength?: number; }
+const InputField: React.FC<InputFieldProps> = ({ id, name, type, label, value, onChange, error, placeholder, maxLength }) => (
+    <div>
+        <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label.replace(' *', '')}{label.includes('*') && <span className="text-red-500"> *</span>}</label>
+        <input type={type} id={id} name={name} value={value} onChange={onChange} placeholder={placeholder} maxLength={maxLength} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`} />
+        {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+);
 
-    return (
-        <div>
-            <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">
-                {labelText}
-                {isRequired && <span className="text-red-500"> *</span>}
-            </label>
-            <input
-                type={type}
-                id={id}
-                name={name}
-                value={value}
-                onChange={onChange}
-                placeholder={placeholder}
-                maxLength={maxLength}
-                className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`}
-            />
-            {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
-        </div>
-    );
-};
+interface SelectFieldProps { id: string; name: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLSelectElement>) => void; error?: string; options: string[]; }
+const SelectField: React.FC<SelectFieldProps> = ({ id, name, label, value, onChange, error, options }) => (
+    <div>
+        <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label.replace(' *', '')}{label.includes('*') && <span className="text-red-500"> *</span>}</label>
+        <select id={id} name={name} value={value} onChange={onChange} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`}>
+            <option value="" disabled>Select...</option>
+            {options.map(option => (<option key={option} value={option}>{option}</option>))}
+        </select>
+        {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+);
 
-interface SelectFieldProps {
-    id: string;
-    name: string;
-    label: string;
-    value: string;
-    onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
-    error?: string;
-    options: string[];
-}
+interface TextAreaFieldProps { id: string; name: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void; error?: string; placeholder?: string; }
+const TextAreaField: React.FC<TextAreaFieldProps> = ({ id, name, label, value, onChange, error, placeholder }) => (
+    <div>
+        <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label.replace(' *', '')}{label.includes('*') && <span className="text-red-500"> *</span>}</label>
+        <textarea id={id} name={name} value={value} onChange={onChange} placeholder={placeholder} rows={3} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`} />
+        {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+);
 
-const SelectField: React.FC<SelectFieldProps> = ({ id, name, label, value, onChange, error, options }) => {
-    const isRequired = label.endsWith('*');
-    const labelText = isRequired ? label.slice(0, -1).trim() : label;
+// --- Profile Upload Component (with Portal Fix) ---
 
-    return (
-        <div>
-            <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">
-                {labelText}
-                {isRequired && <span className="text-red-500"> *</span>}
-            </label>
-            <select
-                id={id}
-                name={name}
-                value={value}
-                onChange={onChange}
-                className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`}
-            >
-                <option value="" disabled>Select...</option>
-                {options.map(option => (
-                    <option key={option} value={option}>{option}</option>
-                ))}
-            </select>
-            {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
-        </div>
-    );
-};
-
-
-interface TextAreaFieldProps {
-    id: string;
-    name: string;
-    placeholder: string;
-    value: string;
-    onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void;
-    error?: string;
-    label: string;
-}
-
-const TextAreaField: React.FC<TextAreaFieldProps> = ({ id, name, placeholder, value, onChange, error, label }) => {
-    const isRequired = label.endsWith('*');
-    const labelText = isRequired ? label.slice(0, -1).trim() : label;
-
-    return (
-        <div>
-            <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">
-                {labelText}
-                {isRequired && <span className="text-red-500"> *</span>}
-            </label>
-            <textarea
-                id={id}
-                name={name}
-                value={value}
-                onChange={onChange}
-                placeholder={placeholder}
-                rows={3}
-                className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`}
-            />
-            {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
-        </div>
-    );
-};
-
-
-interface ProfileUploadFieldProps {
-    id: string;
-    name: string;
-    file: File | null;
-    onChange: (e: ChangeEvent<HTMLInputElement>) => void;
-    error?: string;
-    isCompressing: boolean;
-}
-
-const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ id, name, file, onChange, error, isCompressing }) => {
+interface ProfileUploadFieldProps { name: string; file: File | null; onChange: (e: ChangeEvent<HTMLInputElement>) => void; error?: string; }
+const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ name, file, onChange, error }) => {
     const [preview, setPreview] = useState<string | null>(null);
     const [crop, setCrop] = useState({ x: 0, y: 0 });
     const [zoom, setZoom] = useState(1);
     const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
     const [showCropper, setShowCropper] = useState(false);
-    const [localFile, setLocalFile] = useState<File | null>(null);
     const [croppedImage, setCroppedImage] = useState<string | null>(null);
-    const [hasCropped, setHasCropped] = useState(false);
+    const [isCompressing, setIsCompressing] = useState(false);
+    const [isMounted, setIsMounted] = useState(false);
 
-    useEffect(() => {
-        if (!file) {
-            setPreview(null);
-            setShowCropper(false);
-            setLocalFile(null);
-            // Do NOT reset croppedImage here, so the edit icon remains after cropping
-            return;
-        }
-        const objectUrl = URL.createObjectURL(file);
-        setPreview(objectUrl);
-        setShowCropper(!hasCropped); // Only show cropper on first upload
-        setLocalFile(file);
-        return () => URL.revokeObjectURL(objectUrl);
-    }, [file]);
+    useEffect(() => { setIsMounted(true); }, []);
 
-    // Helper to get cropped image as File and DataURL
-    const getCroppedImg = useCallback(async (imageSrc: string, cropPixels: any): Promise<{ file: File, url: string } | null> => {
-        return new Promise((resolve, reject) => {
-            const image = new window.Image();
-            image.crossOrigin = 'anonymous';
-            image.onload = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = 150;
-                canvas.height = 190;
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return reject('No ctx');
-                ctx.drawImage(
-                    image,
-                    cropPixels.x,
-                    cropPixels.y,
-                    cropPixels.width,
-                    cropPixels.height,
-                    0,
-                    0,
-                    150,
-                    190
-                );
-                canvas.toBlob(blob => {
-                    if (!blob) return reject('No blob');
-                    const file = new File([blob], localFile?.name || 'cropped.jpg', { type: 'image/jpeg' });
-                    const url = URL.createObjectURL(blob);
-                    resolve({ file, url });
-                }, 'image/jpeg', 0.95);
-            };
-            image.onerror = reject;
-            image.src = imageSrc;
-        });
-    }, [localFile]);
-
-    interface CroppedArea {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-    }
-
-    interface Area {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-    }
-
-    const onCropComplete = useCallback(
-        (croppedArea: Area, croppedAreaPixels: CroppedArea) => {
-            setCroppedAreaPixels(croppedAreaPixels);
-        },
-        []
-    );
-
-    // When user clicks 'Apply Crop', update the file in parent and show cropped image
-    const handleApplyCrop = async () => {
-        if (!preview || !croppedAreaPixels) return;
-        const result = await getCroppedImg(preview, croppedAreaPixels);
-        if (result) {
-            const { file: croppedFile, url } = result;
-            // Create a synthetic event to pass to onChange
-            const dataTransfer = new DataTransfer();
-            dataTransfer.items.add(croppedFile);
-            const syntheticEvent = {
-                target: {
-                    name,
-                    files: dataTransfer.files,
-                }
-            } as unknown as ChangeEvent<HTMLInputElement>;
-            onChange(syntheticEvent);
-            setShowCropper(false);
-            setCroppedImage(url);
-            setHasCropped(true);
+    const onFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            const objectUrl = URL.createObjectURL(file);
+            setPreview(objectUrl);
+            setShowCropper(true);
         }
     };
 
-    // Modal dialog for cropping
+    const getCroppedImg = useCallback(async (imageSrc: string, cropPixels: any): Promise<File | null> => {
+        if (!window.imageCompression) return null;
+        const image = new Image();
+        image.src = imageSrc;
+        await new Promise(resolve => { image.onload = resolve; });
+        const canvas = document.createElement('canvas');
+        canvas.width = 150; canvas.height = 190;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(image, cropPixels.x, cropPixels.y, cropPixels.width, cropPixels.height, 0, 0, 150, 190);
+        return new Promise((resolve) => {
+            canvas.toBlob((blob) => {
+                if (!blob) { resolve(null); return; }
+                resolve(new File([blob], "profile.jpg", { type: 'image/jpeg' }));
+            }, 'image/jpeg', 0.95);
+        });
+    }, []);
+
+    const onCropComplete = useCallback((croppedArea: any, croppedAreaPixels: any) => { setCroppedAreaPixels(croppedAreaPixels); }, []);
+
+    const handleApplyCrop = async () => {
+        if (!preview || !croppedAreaPixels) return;
+        setIsCompressing(true);
+        setShowCropper(false);
+        const croppedFile = await getCroppedImg(preview, croppedAreaPixels);
+        if (croppedFile) {
+            try {
+                const compressedBlob = await window.imageCompression(croppedFile, { maxSizeMB: 0.1, maxWidthOrHeight: 800 });
+
+                // FIX: Manually create a new File object from the compressed blob
+                const fileToAdd = new File([compressedBlob], "profile_picture.jpg", {
+                    type: compressedBlob.type,
+                    lastModified: new Date().getTime(),
+                });
+
+                const dataTransfer = new DataTransfer();
+                // Use the guaranteed File object here
+                dataTransfer.items.add(fileToAdd);
+
+                const syntheticEvent = { target: { name, files: dataTransfer.files } } as unknown as ChangeEvent<HTMLInputElement>;
+                onChange(syntheticEvent);
+                setCroppedImage(URL.createObjectURL(fileToAdd));
+            } catch (err) {
+                console.error("Compression or file handling failed:", err);
+            }
+        }
+        setIsCompressing(false);
+        setPreview(null);
+    };
+
+    const CropperModal = (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        {/* The modal panel will now respect the padding from the parent above */}
+        <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3">
+                <h3 className="text-xl text-black font-semibold">Crop Image</h3>
+                <button type="button" className="p-1 rounded-full text-gray-400 text-2xl" onClick={() => setShowCropper(false)}>&times;</button>
+            </div>
+            <div className="relative w-full h-96 bg-gray-100 rounded-md overflow-hidden">
+                <Cropper 
+                    image={preview!} 
+                    crop={crop} 
+                    zoom={zoom} 
+                    aspect={150 / 190} 
+                    onCropChange={setCrop} 
+                    onZoomChange={setZoom} 
+                    onCropComplete={onCropComplete} 
+                />
+            </div>
+            <div className="flex justify-end gap-4 pt-3">
+                <button type="button" className="px-5 py-2 rounded-lg text-sm bg-gray-200 text-black hover:bg-gray-300" onClick={() => setShowCropper(false)}>Cancel</button>
+                <button type="button" className="px-5 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700" onClick={handleApplyCrop}>Apply Crop</button>
+            </div>
+        </div>
+    </div>
+);
+
     return (
         <div className="flex flex-col items-center text-center mt-5">
-            <label className="block text-sm font-medium text-gray-700">
-                Profile Picture <span className="text-red-500">*</span>
-            </label>
+            <label className="block text-sm font-medium text-gray-700">Profile Picture <span className="text-red-500">*</span></label>
             <div className="relative w-[180px] h-[220px]">
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[150px] h-[190px] bg-gray-100 flex items-center justify-center overflow-hidden border-2 border-dashed border-gray-300 rounded-md">
-                    {isCompressing ? (
-                        <Loader className="text-gray-400 animate-spin" size={48} />
-                    ) : croppedImage ? (
-                        <div className="relative w-full h-full">
-                            <img src={croppedImage} alt="Cropped Preview" className="w-full h-full object-cover" />
-                            <button
-                                type="button"
-                                className="absolute top-2 right-2 bg-white bg-opacity-80 rounded-full p-1 shadow hover:bg-orange-100 transition"
-                                title="Edit/Crop Image"
-                                onClick={() => setShowCropper(true)}
-                                style={{zIndex: 2}}
-                            >
-                                <Pencil size={18} className="text-orange-500" />
-                            </button>
-                        </div>
-                    ) : preview ? (
-                        <img src={preview} alt="Profile Preview" className="w-full h-full object-cover" />
-                    ) : (
-                        <User size={64} className="text-gray-300" />
-                    )}
+                    {isCompressing ? <Loader className="text-gray-400 animate-spin" size={48} /> : croppedImage ? <div className="relative w-full h-full"><img src={croppedImage} alt="Preview" className="w-full h-full object-cover" /><button type="button" className="absolute top-2 right-2 bg-white/80 rounded-full p-1 shadow hover:bg-orange-100" onClick={() => document.getElementById('profile-picture-input')?.click()}><Pencil size={18} className="text-orange-500" /></button></div> : <User size={64} className="text-gray-300" />}
                 </div>
-                <span className="absolute top-1/2 -right-1 -translate-y-1/2 -rotate-90 text-xs text-gray-400 tracking-widest">H: 4.5cm</span>
-                <span className="absolute bottom-5 left-1/2 -translate-x-1/2 text-xs text-gray-400 tracking-widest">W: 3.5cm</span>
+                <span className="absolute top-1/2 -right-1 -translate-y-1/2 -rotate-90 text-xs text-gray-400 tracking-widest">H: 4.5cm</span><span className="absolute bottom-5 left-1/2 -translate-x-1/2 text-xs text-gray-400 tracking-widest">W: 3.5cm</span>
             </div>
-            <label htmlFor={id} className={`inline-block px-8 py-2 text-sm font-medium text-white bg-orange-500 rounded-md  focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 ${isCompressing ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
-                {isCompressing ? 'Compressing...' : 'Upload Image'}
+            <label htmlFor="profile-picture-input" className={`mt-4 inline-block px-8 py-2 text-sm font-medium text-white bg-orange-500 rounded-md ${isCompressing ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-orange-600'}`}>
+                {file ? 'Change Image' : 'Upload Image'}
             </label>
-            <input id={id} name={name} type="file" className="sr-only" onChange={onChange} disabled={isCompressing} accept="image/png, image/jpeg" />
-            <p className="mt-2 text-xs text-gray-500">
-                Max 100KB. PNG or JPG.
-            </p>
+            <input id="profile-picture-input" type="file" className="sr-only" onChange={onFileChange} disabled={isCompressing} accept="image/png, image/jpeg" />
+            <p className="mt-2 text-xs text-gray-500">Max 100KB. PNG or JPG.</p>
             {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
-
-            {/* Modal for cropping - larger and less opaque overlay */}
-            {showCropper && preview && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-                    <div className="bg-white rounded-lg shadow-lg p-6 relative w-[420px] max-w-full">
-                        <h3 className="text-lg font-semibold mb-2">Crop Image</h3>
-                        <div className="relative w-[250px] h-[320px] mx-auto bg-gray-100">
-                            <Cropper
-                                image={preview}
-                                crop={crop}
-                                zoom={zoom}
-                                aspect={150/190}
-                                cropShape="rect"
-                                showGrid={true}
-                                onCropChange={setCrop}
-                                onZoomChange={setZoom}
-                                onCropComplete={onCropComplete}
-                                minZoom={1}
-                                maxZoom={3}
-                                restrictPosition={false}
-                                style={{ containerStyle: { width: '250px', height: '320px' } }}
-                            />
-                        </div>
-                        <div className="flex justify-center gap-4 mt-4">
-                            <button type="button" className="bg-orange-500 text-white px-4 py-1 rounded shadow" onClick={handleApplyCrop}>Apply Crop</button>
-                            <button type="button" className="bg-gray-300 text-gray-700 px-4 py-1 rounded shadow" onClick={() => setShowCropper(false)}>Cancel</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {showCropper && isMounted && preview && createPortal(CropperModal, document.getElementById('modal-portal')!)}
         </div>
     );
 };
 
+// --- Success View Component ---
 
-interface SuccessViewProps {
-    handleReset: () => void;
-}
-
+interface SuccessViewProps { handleReset: () => void; }
 const SuccessView: React.FC<SuccessViewProps> = ({ handleReset }) => (
     <div className="animate-fade-in text-center flex flex-col items-center justify-center p-8 h-full">
         <CheckCircle size={64} className="text-green-500 mb-4" />
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Registration Submitted!</h2>
-        <p className="text-gray-600 mb-6">Thank you for registering. We will get in touch with you shortly.</p>
+        <p className="text-gray-600 mb-6">Thank you. We will review your application and get in touch shortly.</p>
+        {/* <button onClick={handleReset} className="px-6 py-2 bg-orange-500 text-white font-semibold rounded-md hover:bg-orange-600">Register Another</button> */}
     </div>
 );
+
+export default App;

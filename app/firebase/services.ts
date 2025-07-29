@@ -1,3 +1,6 @@
+// 'use client';
+import { db } from './firebase';import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { addDoc, collection,  query, where, getDocs } from 'firebase/firestore';
 // Utility to crop an image file to the specified width and height
 export async function cropImageToDimensions(file: File, width: number, height: number): Promise<File> {
   return new Promise((resolve, reject) => {
@@ -44,10 +47,6 @@ export async function cropImageToDimensions(file: File, width: number, height: n
     img.src = url;
   });
 }
-// 'use client';
-import { db } from './firebase';
-import { collection, addDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export const addRegistration = async (data: any) => {
   try {
@@ -76,4 +75,11 @@ export const uploadProfilePicture = async (file: File, userId: string) => {
   const fileRef = ref(storage, `profilePictures/${filename}`);
   await uploadBytes(fileRef, file);
   return await getDownloadURL(fileRef);
+};
+
+export const checkAadhaarExists = async (aadhaar: string) => {
+  const registrationsRef = collection(db, 'registrations');
+  const q = query(registrationsRef, where('aadhaar', '==', aadhaar));
+  const querySnapshot = await getDocs(q);
+  return !querySnapshot.empty;
 };

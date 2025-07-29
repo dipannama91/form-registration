@@ -4,8 +4,6 @@ import { createPortal } from 'react-dom'; // Import createPortal
 import Cropper from 'react-easy-crop';
 import { User, Loader, Pencil, CheckCircle } from 'lucide-react';
 import { addRegistration, uploadProfilePicture, cropImageToDimensions, checkAadhaarExists } from './firebase/services';
-import { db } from './firebase/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
 
 // Type definitions
 interface FormData {
@@ -48,6 +46,7 @@ const App: React.FC = () => {
     const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [aadhaarExistsError, setAadhaarExistsError] = useState<boolean>(false);
+    const [isSameAddress, setIsSameAddress] = useState<boolean>(false); // State for the checkbox
     const [formData, setFormData] = useState<FormData>({
         fullName: '',
         dob: '',
@@ -89,7 +88,6 @@ const App: React.FC = () => {
 
         if ('files' in e.target && e.target.files && e.target.files[0] && name === 'profilePicture') {
             const file = e.target.files[0];
-            // This now just sets the file, the cropping/compression is handled in ProfileUploadField
             setFormData((prev) => ({ ...prev, [name]: file }));
             if (errors[name as keyof FormErrors]) {
                 setErrors(prev => ({ ...prev, [name]: undefined }));
@@ -104,13 +102,33 @@ const App: React.FC = () => {
                 processedValue = value.slice(0, 10).toUpperCase();
             }
 
-            setFormData((prev) => ({ ...prev, [name]: processedValue }));
+            setFormData((prev) => {
+                const newFormData = { ...prev, [name]: processedValue };
+                // If "same address" is checked and permanent address is updated, also update current address.
+                if (isSameAddress && name === 'address1') {
+                    newFormData.address2 = processedValue;
+                }
+                return newFormData;
+            });
+
             if (errors[name as keyof FormErrors]) {
                 setErrors(prev => ({ ...prev, [name]: undefined }));
             }
         }
     };
 
+    // Handler for the "Same as Permanent Address" checkbox
+    const handleSameAddressChange = (e: ChangeEvent<HTMLInputElement>) => {
+        const { checked } = e.target;
+        setIsSameAddress(checked);
+
+        if (checked) {
+            setFormData(prev => ({ ...prev, address2: prev.address1 }));
+        } else {
+            // Clear current address when unchecked
+            setFormData(prev => ({ ...prev, address2: '' }));
+        }
+    };
 
     const validateForm = (): boolean => {
         let newErrors: FormErrors = {};
@@ -138,13 +156,12 @@ const App: React.FC = () => {
         e.preventDefault();
         if (isSubmitting) return;
 
-        setIsSubmitting(true);
         setAadhaarExistsError(false);
-
         if (!validateForm()) {
-            setIsSubmitting(false);
             return;
         }
+
+        setIsSubmitting(true); // Start submission process
 
         try {
             const exists = await checkAadhaarExists(formData.aadhaar);
@@ -168,13 +185,14 @@ const App: React.FC = () => {
             console.error("Submission failed:", err);
             setErrors(prev => ({ ...prev, profilePicture: 'Failed to submit data. Please try again.' }));
         } finally {
-            setIsSubmitting(false);
+            setIsSubmitting(false); // End submission process
         }
     };
 
     const handleReset = () => {
         setIsSubmitted(false);
         setAadhaarExistsError(false);
+        setIsSameAddress(false);
         setFormData({
             fullName: '', dob: '', gender: '', occupation: '', education: '',
             aadhaar: '', pan: '', voterId: '',
@@ -187,6 +205,7 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-orange-500/80 font-sans">
+            {isSubmitting && <SubmissionOverlay />}
             <style>{`
                 @keyframes fade-in {
                     from { opacity: 0; transform: translateY(10px); }
@@ -196,16 +215,7 @@ const App: React.FC = () => {
                     animation: fade-in 0.5s ease-out forwards;
                 }
             `}</style>
-            <header className="bg-white shadow-md flex items-center p-2">
-                <div className="container mx-auto px-4 py-0 flex items-center space-x-4">
-                    <img src="/logo.png" alt="Rudra Foundation Logo" className="w-24 h-24 rounded-full" />
-                    <div className="flex flex-col justify-center pt-1" >
-                        <h1 className="text-xl -ml-4 md:text-2xl lg:text-3xl leading-8 font-bold text-orange-600">R.U.D.R.A</h1>
-                        <p className="text-md -ml-4  text-gray-400">Rising Union for Digital Riders Association</p>
-                    </div>
-                </div>
-            </header>
-
+            
             <main className="container mx-auto p-4 md:p-8">
                 <div className="max-w-4xl mx-auto bg-white p-6 md:p-8 rounded-lg border border-gray-200">
                     {aadhaarExistsError ? (
@@ -219,6 +229,8 @@ const App: React.FC = () => {
                             handleChange={handleChange}
                             handleSubmit={handleSubmit}
                             isSubmitting={isSubmitting}
+                            isSameAddress={isSameAddress}
+                            onSameAddressChange={handleSameAddressChange}
                         />
                     )}
                 </div>
@@ -235,9 +247,11 @@ interface RegistrationFormProps {
     handleChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void;
     handleSubmit: (e: FormEvent<HTMLFormElement>) => void;
     isSubmitting?: boolean;
+    isSameAddress: boolean;
+    onSameAddressChange: (e: ChangeEvent<HTMLInputElement>) => void;
 }
 
-const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, handleChange, handleSubmit, isSubmitting }) => {
+const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, handleChange, handleSubmit, isSubmitting, isSameAddress, onSameAddressChange }) => {
     const occupationOptions = ["Private Sector Employee", "Government Employee", "Self-employed/Business", "Professional", "Farmer", "Student", "Homemaker", "Retired", "Unemployed", "Other"];
     return (
         <div className="animate-fade-in">
@@ -261,7 +275,20 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, h
                         </div>
                         <InputField id="voterId" name="voterId" type="text" placeholder="10-character Voter ID" label="Voter ID *" value={formData.voterId} onChange={handleChange} error={errors.voterId} maxLength={10} />
                         <InputField id="address1" name="address1" type="text" placeholder="Permanent Address" label="Permanent Address *" value={formData.address1} onChange={handleChange} error={errors.address1} />
-                        <InputField id="address2" name="address2" type="text" placeholder="Current Address" label="Current Address" value={formData.address2} onChange={handleChange} error={errors.address2} />
+                        <div className="flex items-center mt-2">
+                            <input
+                                id="sameAddress"
+                                name="sameAddress"
+                                type="checkbox"
+                                checked={isSameAddress}
+                                onChange={onSameAddressChange}
+                                className="h-4 w-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
+                            />
+                            <label htmlFor="sameAddress" className="ml-2 block text-sm text-gray-900">
+                                Current address is the same as permanent address
+                            </label>
+                        </div>
+                        <InputField id="address2" name="address2" type="text" placeholder="Current Address" label="Current Address" value={formData.address2} onChange={handleChange} error={errors.address2} disabled={isSameAddress} />
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <InputField id="city" name="city" type="text" placeholder="City" label="City *" value={formData.city} onChange={handleChange} error={errors.city} />
                             <InputField id="state" name="state" type="text" placeholder="State" label="State *" value={formData.state} onChange={handleChange} error={errors.state} />
@@ -292,13 +319,23 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, h
     );
 };
 
+// --- New Submission Overlay Component ---
+const SubmissionOverlay: React.FC = () => (
+    <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+        <div className="flex flex-col items-center">
+            <Loader className="text-white animate-spin" size={64} />
+            <p className="text-white text-lg mt-4">Submitting, please wait...</p>
+        </div>
+    </div>
+);
+
 // --- Form Field Components ---
 
-interface InputFieldProps { id: string; name: string; type: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLInputElement>) => void; error?: string; placeholder?: string; maxLength?: number; }
-const InputField: React.FC<InputFieldProps> = ({ id, name, type, label, value, onChange, error, placeholder, maxLength }) => (
+interface InputFieldProps { id: string; name: string; type: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLInputElement>) => void; error?: string; placeholder?: string; maxLength?: number; disabled?: boolean; }
+const InputField: React.FC<InputFieldProps> = ({ id, name, type, label, value, onChange, error, placeholder, maxLength, disabled = false }) => (
     <div>
         <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label.replace(' *', '')}{label.includes('*') && <span className="text-red-500"> *</span>}</label>
-        <input type={type} id={id} name={name} value={value} onChange={onChange} placeholder={placeholder} maxLength={maxLength} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`} />
+        <input type={type} id={id} name={name} value={value} onChange={onChange} placeholder={placeholder} maxLength={maxLength} disabled={disabled} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'} ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`} />
         {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
 );
@@ -325,7 +362,7 @@ const TextAreaField: React.FC<TextAreaFieldProps> = ({ id, name, label, value, o
 );
 
 // --- Profile Upload Component (with Portal Fix) ---
-
+// ... (ProfileUploadField component remains unchanged) ...
 interface ProfileUploadFieldProps { name: string; file: File | null; onChange: (e: ChangeEvent<HTMLInputElement>) => void; error?: string; }
 const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ name, file, onChange, error }) => {
     const [preview, setPreview] = useState<string | null>(null);
@@ -375,17 +412,12 @@ const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ name, file, onC
         if (croppedFile) {
             try {
                 const compressedBlob = await window.imageCompression(croppedFile, { maxSizeMB: 0.1, maxWidthOrHeight: 800 });
-
-                // FIX: Manually create a new File object from the compressed blob
                 const fileToAdd = new File([compressedBlob], "profile_picture.jpg", {
                     type: compressedBlob.type,
                     lastModified: new Date().getTime(),
                 });
-
                 const dataTransfer = new DataTransfer();
-                // Use the guaranteed File object here
                 dataTransfer.items.add(fileToAdd);
-
                 const syntheticEvent = { target: { name, files: dataTransfer.files } } as unknown as ChangeEvent<HTMLInputElement>;
                 onChange(syntheticEvent);
                 setCroppedImage(URL.createObjectURL(fileToAdd));
@@ -399,7 +431,6 @@ const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ name, file, onC
 
     const CropperModal = (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-        {/* The modal panel will now respect the padding from the parent above */}
         <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
             <div className="flex items-center justify-between pb-3">
                 <h3 className="text-xl text-black font-semibold">Crop Image</h3>
@@ -452,7 +483,9 @@ const SuccessView: React.FC<SuccessViewProps> = ({ handleReset }) => (
         <CheckCircle size={64} className="text-green-500 mb-4" />
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Registration Submitted!</h2>
         <p className="text-gray-600 mb-6">Thank you. We will review your application and get in touch shortly.</p>
-        {/* <button onClick={handleReset} className="px-6 py-2 bg-orange-500 text-white font-semibold rounded-md hover:bg-orange-600">Register Another</button> */}
+        <button onClick={handleReset} className="px-6 py-2 bg-orange-500 text-white font-semibold rounded-md hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300">
+            Back to Home
+        </button>
     </div>
 );
 

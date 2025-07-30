@@ -215,11 +215,16 @@ const App: React.FC = () => {
                     animation: fade-in 0.5s ease-out forwards;
                 }
             `}</style>
-            
+
             <main className="container mx-auto p-4 md:p-8">
                 <div className="max-w-4xl mx-auto bg-white p-6 md:p-8 rounded-lg border border-gray-200">
                     {aadhaarExistsError ? (
-                        <div className="text-center text-red-600 text-lg font-semibold py-8">Oops! This Aadhaar number is already registered.</div>
+                        <div className="text-center text-red-600 text-lg font-semibold py-8">
+                            <div className="text-center text-red-600 text-lg font-semibold py-8">Oops! This Aadhaar number is already registered.</div>
+                            <button onClick={handleReset} className="px-6 py-2 bg-orange-500 text-white font-semibold rounded-md hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300">
+                                Back to Home
+                            </button>
+                        </div>
                     ) : isSubmitted ? (
                         <SuccessView handleReset={handleReset} />
                     ) : (
@@ -321,7 +326,7 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, h
 
 // --- New Submission Overlay Component ---
 const SubmissionOverlay: React.FC = () => (
-    <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm bg-opacity-75 flex items-center justify-center z-50">
         <div className="flex flex-col items-center">
             <Loader className="text-white animate-spin" size={64} />
             <p className="text-white text-lg mt-4">Submitting, please wait...</p>
@@ -430,30 +435,30 @@ const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ name, file, onC
     };
 
     const CropperModal = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-        <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3">
-                <h3 className="text-xl text-black font-semibold">Crop Image</h3>
-                <button type="button" className="p-1 rounded-full text-gray-400 text-2xl" onClick={() => setShowCropper(false)}>&times;</button>
-            </div>
-            <div className="relative w-full h-96 bg-gray-100 rounded-md overflow-hidden">
-                <Cropper 
-                    image={preview!} 
-                    crop={crop} 
-                    zoom={zoom} 
-                    aspect={150 / 190} 
-                    onCropChange={setCrop} 
-                    onZoomChange={setZoom} 
-                    onCropComplete={onCropComplete} 
-                />
-            </div>
-            <div className="flex justify-end gap-4 pt-3">
-                <button type="button" className="px-5 py-2 rounded-lg text-sm bg-gray-200 text-black hover:bg-gray-300" onClick={() => setShowCropper(false)}>Cancel</button>
-                <button type="button" className="px-5 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700" onClick={handleApplyCrop}>Apply Crop</button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+                <div className="flex items-center justify-between pb-3">
+                    <h3 className="text-xl text-black font-semibold">Crop Image</h3>
+                    <button type="button" className="p-1 rounded-full text-gray-400 text-2xl" onClick={() => setShowCropper(false)}>&times;</button>
+                </div>
+                <div className="relative w-full h-96 bg-gray-100 rounded-md overflow-hidden">
+                    <Cropper
+                        image={preview!}
+                        crop={crop}
+                        zoom={zoom}
+                        aspect={150 / 190}
+                        onCropChange={setCrop}
+                        onZoomChange={setZoom}
+                        onCropComplete={onCropComplete}
+                    />
+                </div>
+                <div className="flex justify-end gap-4 pt-3">
+                    <button type="button" className="px-5 py-2 rounded-lg text-sm bg-gray-200 text-black hover:bg-gray-300" onClick={() => setShowCropper(false)}>Cancel</button>
+                    <button type="button" className="px-5 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700" onClick={handleApplyCrop}>Apply Crop</button>
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
 
     return (
         <div className="flex flex-col items-center text-center mt-5">

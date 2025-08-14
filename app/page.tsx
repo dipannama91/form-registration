@@ -18,7 +18,7 @@ const tripuraConstituencies = {
     ],
     Gomati: [
         "30-Bagma (ST)",
-        "33-Kakraban–Salgarh (SC)",
+        "33-Kakraban-Salgarh (SC)",
         "43-Karbook (ST)",
         "32-Matarbari",
         "31-Radhakishorpur",
@@ -27,7 +27,7 @@ const tripuraConstituencies = {
     ],
     Khowai: [
         "26-Asharambari (ST)",
-        "27-Kalyanpur–Pramodenagar",
+        "27-Kalyanpur-Pramodenagar",
         "25-Khowai",
         "29-Krishnapur (ST)",
         "24-Ramchandraghat (ST)",
@@ -37,7 +37,7 @@ const tripuraConstituencies = {
         "55-Bagbassa",
         "56-Dharmanagar",
         "57-Jubarajnagar",
-        "54-Kadamtala–Kurti",
+        "54-Kadamtala-Kurti",
         "60-Kanchanpur (ST)",
         "58-Panisagar",
         "59-Pencharthal (ST)"
@@ -128,7 +128,7 @@ declare global {
 const App: React.FC = () => {
     const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-    const [aadhaarExistsError, setAadhaarExistsError] = useState<boolean>(false);
+    const [aadhaarExistsError, setAadhaarExistsError] = useState<boolean>(false);   
     const [isSameAddress, setIsSameAddress] = useState<boolean>(false);
     const [formData, setFormData] = useState<FormData>({
         fullName: '',
@@ -229,7 +229,7 @@ const App: React.FC = () => {
         if (!formData.education) newErrors.education = 'Highest qualification is required.';
         if (!formData.aadhaar || !/^\d{12}$/.test(formData.aadhaar)) newErrors.aadhaar = 'A valid 12-digit Aadhaar number is required.';
         if (formData.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(formData.pan.toUpperCase())) newErrors.pan = 'Please enter a valid PAN number.';
-        if (!formData.voterId || !/^[A-Z]{3}[0-9]{7}$/.test(formData.voterId.toUpperCase())) newErrors.voterId = 'A valid 10-character Voter ID is required.';
+        // if (!formData.voterId || !/^[A-Z]{3}[0-9]{7}$/.test(formData.voterId.toUpperCase())) newErrors.voterId = 'A valid 10-character Voter ID is required.';
         if (!formData.address1) newErrors.address1 = 'Permanent address is required.';
         if (!formData.city) newErrors.city = 'City is required.';
         if (!formData.state) newErrors.state = 'State is required.';
@@ -370,7 +370,7 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, h
                             <InputField id="aadhaar" name="aadhaar" type="text" placeholder="12-digit Number" label="Aadhaar Number *" value={formData.aadhaar} onChange={handleChange} error={errors.aadhaar} maxLength={12} />
                             <InputField id="pan" name="pan" type="text" placeholder="10-character PAN" label="PAN Number (Optional)" value={formData.pan} onChange={handleChange} error={errors.pan} maxLength={10} />
                         </div>
-                        <InputField id="voterId" name="voterId" type="text" placeholder="10-character Voter ID" label="Voter ID *" value={formData.voterId} onChange={handleChange} error={errors.voterId} maxLength={10} />
+                        <InputField id="voterId" name="voterId" type="text" placeholder="10-character Voter ID" label="Voter ID (Optional)" value={formData.voterId} onChange={handleChange} error={errors.voterId} maxLength={10} />
                         <InputField id="address1" name="address1" type="text" placeholder="Permanent Address" label="Permanent Address *" value={formData.address1} onChange={handleChange} error={errors.address1} />
                         <div className="flex items-center mt-2">
                             <input

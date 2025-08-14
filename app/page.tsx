@@ -5,6 +5,87 @@ import Cropper from 'react-easy-crop';
 import { User, Loader, Pencil, CheckCircle } from 'lucide-react';
 import { addRegistration, uploadProfilePicture, cropImageToDimensions, checkAadhaarExists } from './firebase/services';
 
+// Data for Tripura constituencies, grouped by district
+const tripuraConstituencies = {
+    Dhalai: [
+        "47-Ambassa (ST)",
+        "49-Chawamanu (ST)",
+        "44-Raima Valley (ST)",
+        "45-Kamalpur",
+        "48-Karamcherra (ST)",
+        "44-Raima Valley (ST)",
+        "46-Surma (SC)"
+    ],
+    Gomati: [
+        "30-Bagma (ST)",
+        "33-Kakraban–Salgarh (SC)",
+        "43-Karbook (ST)",
+        "32-Matarbari",
+        "31-Radhakishorpur",
+        "41-Ampinagar (ST)",
+        "42-Amarpur",
+    ],
+    Khowai: [
+        "26-Asharambari (ST)",
+        "27-Kalyanpur–Pramodenagar",
+        "25-Khowai",
+        "29-Krishnapur (ST)",
+        "24-Ramchandraghat (ST)",
+        "28-Teliamura"
+    ],
+    "North Tripura": [
+        "55-Bagbassa",
+        "56-Dharmanagar",
+        "57-Jubarajnagar",
+        "54-Kadamtala–Kurti",
+        "60-Kanchanpur (ST)",
+        "58-Panisagar",
+        "59-Pencharthal (ST)"
+    ],
+    Sipahijala: [
+        "16-Bishalgarh",
+        "20-Boxanagar",
+        "19-Charilam (ST)",
+        "23-Dhanpur",
+        "17-Golaghati (ST)",
+        "15-Kamalasagar",
+        "21-Nalchar (SC)",
+        "22-Sonamura",
+        "12-Takarjala (ST)",
+    ],
+    "South Tripura": [
+        "35-Belonia",
+        "37-Hrishyamukh",
+        "38-Jolaibari (ST)",
+        "39-Manu (ST)",
+        "34-Rajnagar (SC)",
+        "40-Sabroom",
+        "36-Santirbazar (ST)"
+    ],
+    Unakoti: [
+        "52-Chandipur",
+        "51-Fatikroy (SC)",
+        "53-Kailashahar",
+        "50-Pabiachhara (SC)"
+    ],
+    "West Tripura": [
+        "6-Agartala",
+        "14-Badharghat (SC)",
+        "9-Banamalipur",
+        "4-Barjala (SC)",
+        "3-Bamutia (SC)",
+        "5-Khayerpur",
+        "10-Majlishpur",
+        "11-Mandaibazar (ST)",
+        "2-Mohanpur",
+        "13-Pratapgarh (SC)",
+        "7-Ramnagar",
+        "1-Simna (ST)",
+        "18-Suryamaninagar",
+        "8-Town Bordowali"
+    ]
+};
+
 // Type definitions
 interface FormData {
     fullName: string;
@@ -20,6 +101,8 @@ interface FormData {
     city: string;
     state: string;
     zip: string;
+    district: string; // New field
+    constituency: string; // New field
     phone: string;
     email: string;
     reasonForJoining: string;
@@ -46,7 +129,7 @@ const App: React.FC = () => {
     const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [aadhaarExistsError, setAadhaarExistsError] = useState<boolean>(false);
-    const [isSameAddress, setIsSameAddress] = useState<boolean>(false); // State for the checkbox
+    const [isSameAddress, setIsSameAddress] = useState<boolean>(false);
     const [formData, setFormData] = useState<FormData>({
         fullName: '',
         dob: '',
@@ -61,6 +144,8 @@ const App: React.FC = () => {
         city: '',
         state: '',
         zip: '',
+        district: '', // New field
+        constituency: '', // New field
         phone: '',
         email: '',
         reasonForJoining: '',
@@ -104,10 +189,16 @@ const App: React.FC = () => {
 
             setFormData((prev) => {
                 const newFormData = { ...prev, [name]: processedValue };
-                // If "same address" is checked and permanent address is updated, also update current address.
+
                 if (isSameAddress && name === 'address1') {
                     newFormData.address2 = processedValue;
                 }
+
+                // When district changes, reset constituency
+                if (name === 'district') {
+                    newFormData.constituency = '';
+                }
+
                 return newFormData;
             });
 
@@ -125,7 +216,6 @@ const App: React.FC = () => {
         if (checked) {
             setFormData(prev => ({ ...prev, address2: prev.address1 }));
         } else {
-            // Clear current address when unchecked
             setFormData(prev => ({ ...prev, address2: '' }));
         }
     };
@@ -143,6 +233,8 @@ const App: React.FC = () => {
         if (!formData.address1) newErrors.address1 = 'Permanent address is required.';
         if (!formData.city) newErrors.city = 'City is required.';
         if (!formData.state) newErrors.state = 'State is required.';
+        if (!formData.district) newErrors.district = 'District is required.'; // New validation
+        if (!formData.constituency) newErrors.constituency = 'Constituency is required.'; // New validation
         if (formData.zip && !/^\d{6}$/.test(formData.zip)) newErrors.zip = 'Please enter a valid 6-digit Zip Code.';
         if (!formData.phone || !/^\d{10}$/.test(formData.phone)) newErrors.phone = 'A 10-digit phone number is required.';
         if (formData.email && !/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = 'Please enter a valid email.';
@@ -161,7 +253,7 @@ const App: React.FC = () => {
             return;
         }
 
-        setIsSubmitting(true); // Start submission process
+        setIsSubmitting(true);
 
         try {
             const exists = await checkAadhaarExists(formData.aadhaar);
@@ -185,7 +277,7 @@ const App: React.FC = () => {
             console.error("Submission failed:", err);
             setErrors(prev => ({ ...prev, profilePicture: 'Failed to submit data. Please try again.' }));
         } finally {
-            setIsSubmitting(false); // End submission process
+            setIsSubmitting(false);
         }
     };
 
@@ -197,7 +289,7 @@ const App: React.FC = () => {
             fullName: '', dob: '', gender: '', occupation: '', education: '',
             aadhaar: '', pan: '', voterId: '',
             address1: '', address2: '', city: '',
-            state: '', zip: '', phone: '', email: '', reasonForJoining: '',
+            state: '', zip: '', district: '', constituency: '', phone: '', email: '', reasonForJoining: '',
             profilePicture: null,
         });
         setErrors({});
@@ -299,6 +391,29 @@ const RegistrationForm: React.FC<RegistrationFormProps> = ({ formData, errors, h
                             <InputField id="state" name="state" type="text" placeholder="State" label="State *" value={formData.state} onChange={handleChange} error={errors.state} />
                             <InputField id="zip" name="zip" type="text" placeholder="Zip Code" label="Zip Code (Optional)" value={formData.zip} onChange={handleChange} error={errors.zip} maxLength={6} />
                         </div>
+                        {/* --- New District and Constituency Fields --- */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <SelectField
+                                id="district"
+                                name="district"
+                                label="District *"
+                                value={formData.district}
+                                onChange={handleChange}
+                                error={errors.district}
+                                options={Object.keys(tripuraConstituencies)}
+                            />
+                            <SelectField
+                                id="constituency"
+                                name="constituency"
+                                label="Constituency *"
+                                value={formData.constituency}
+                                onChange={handleChange}
+                                error={errors.constituency}
+                                options={formData.district ? tripuraConstituencies[formData.district as keyof typeof tripuraConstituencies] : []}
+                                disabled={!formData.district}
+                            />
+                        </div>
+                        {/* --- End of New Fields --- */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <InputField id="phone" name="phone" type="tel" placeholder="10-digit Phone Number" label="Phone *" value={formData.phone} onChange={handleChange} error={errors.phone} maxLength={10} />
                             <InputField id="email" name="email" type="email" placeholder="example@email.com" label="Email (Optional)" value={formData.email} onChange={handleChange} error={errors.email} />
@@ -345,11 +460,12 @@ const InputField: React.FC<InputFieldProps> = ({ id, name, type, label, value, o
     </div>
 );
 
-interface SelectFieldProps { id: string; name: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLSelectElement>) => void; error?: string; options: string[]; }
-const SelectField: React.FC<SelectFieldProps> = ({ id, name, label, value, onChange, error, options }) => (
+// Updated SelectField to handle 'disabled' prop
+interface SelectFieldProps { id: string; name: string; label: string; value: string; onChange: (e: ChangeEvent<HTMLSelectElement>) => void; error?: string; options: string[]; disabled?: boolean; }
+const SelectField: React.FC<SelectFieldProps> = ({ id, name, label, value, onChange, error, options, disabled = false }) => (
     <div>
         <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label.replace(' *', '')}{label.includes('*') && <span className="text-red-500"> *</span>}</label>
-        <select id={id} name={name} value={value} onChange={onChange} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'}`}>
+        <select id={id} name={name} value={value} onChange={onChange} disabled={disabled} className={`w-full px-3 py-2 bg-white border rounded-md text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-teal-500'} ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}>
             <option value="" disabled>Select...</option>
             {options.map(option => (<option key={option} value={option}>{option}</option>))}
         </select>
@@ -476,6 +592,7 @@ const ProfileUploadField: React.FC<ProfileUploadFieldProps> = ({ name, file, onC
             <p className="mt-2 text-xs text-gray-500">Max 100KB. PNG or JPG.</p>
             {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
             {showCropper && isMounted && preview && createPortal(CropperModal, document.getElementById('modal-portal')!)}
+            <div id="modal-portal"></div>
         </div>
     );
 };
